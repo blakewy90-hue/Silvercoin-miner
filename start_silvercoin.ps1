@@ -1,4 +1,4 @@
-@'
+
 Write-Host "=== Starting Silvercoin Regtest MWEB Environment ===" -ForegroundColor Cyan
 
 # 1. Terminate existing instances

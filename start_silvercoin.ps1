@@ -1,55 +1,26 @@
-# start_silvercoin.ps1
+@'
 Write-Host "=== Starting Silvercoin Regtest MWEB Environment ===" -ForegroundColor Cyan
 
-# 1. Stop existing node & miner processes to prevent port/mempool locks
-Write-Host "[1/4] Terminating existing litecoind and miner instances..." -ForegroundColor Yellow
+# 1. Terminate existing instances
 Get-Process -Name "litecoind", "silvercoin-miner" -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 1
 
-# 2. Locate litecoind.exe executable
+# 2. Locate litecoind.exe
 $currentDir = Get-Location
 $parentDir = Split-Path -Parent $currentDir
 $litecoindPath = Join-Path $currentDir "litecoind.exe"
+if (-not (Test-Path $litecoindPath)) { $litecoindPath = Join-Path $parentDir "litecoind.exe" }
 
-if (-not (Test-Path $litecoindPath)) {
-    $litecoindPath = Join-Path $parentDir "litecoind.exe"
-}
-
-if (-not (Test-Path $litecoindPath)) {
-    Write-Host "ERROR: Could not find litecoind.exe in current or parent folder!" -ForegroundColor Red
-    Read-Host "Press ENTER to exit..."
-    exit
-}
-
-Write-Host "[2/4] Found litecoind.exe at: $litecoindPath" -ForegroundColor Green
-
-# 3. Generate litecoin.conf with proper RPC and MWEB parameters
+# 3. Write configuration
 $configDir = "$env:APPDATA\Litecoin"
-if (-not (Test-Path $configDir)) {
-    New-Item -ItemType Directory -Path $configDir | Out-Null
-}
-
+if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
 $configPath = Join-Path $configDir "litecoin.conf"
-$configLines = @(
-    "regtest=1",
-    "server=1",
-    "rpcuser=rtuser",
-    "rpcpassword=rtpass",
-    "rpcport=19332",
-    "rpcallowip=127.0.0.1",
-    "fallbackfee=0.00001",
-    "mwebactivationheight=1"
-)
+@("regtest=1", "server=1", "rpcuser=rtuser", "rpcpassword=rtpass", "rpcport=19332", "rpcallowip=127.0.0.1", "fallbackfee=0.00001", "mwebactivationheight=1") | Set-Content -Path $configPath -Encoding UTF8
 
-$configLines | Set-Content -Path $configPath -Encoding UTF8
-Write-Host "[3/4] Wrote regtest RPC configuration to: $configPath" -ForegroundColor Green
+# 4. Launch daemon explicitly setting regtest on CLI
+Start-Process -FilePath $litecoindPath -ArgumentList "-regtest -server -rpcuser=rtuser -rpcpassword=rtpass -rpcport=19332 -mwebactivationheight=1" -WindowStyle Hidden
 
-# 4. Launch litecoind daemon with immediate MWEB activation and clean mempool
-Write-Host "[4/4] Launching litecoind daemon..." -ForegroundColor Yellow
-Start-Process -FilePath $litecoindPath -ArgumentList "-regtest -mweb=1 -mwebactivationheight=1 -clearmempool" -WindowStyle Hidden
-
-# 5. Wait for node RPC to respond before starting miner
-Write-Host "Waiting for node RPC to initialize..." -ForegroundColor Cyan
+# 5. Poll RPC until confirmed on regtest
 $rpcReady = $false
 $authHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("rtuser:rtpass"))
 
@@ -58,19 +29,17 @@ for ($i = 0; $i -lt 15; $i++) {
     try {
         $body = '{"jsonrpc":"1.0","id":"test","method":"getblockchaininfo","params":[]}'
         $response = Invoke-RestMethod -Uri "http://127.0.0.1:19332" -Method Post -Headers @{ Authorization = $authHeader } -Body $body -ContentType "application/json" -ErrorAction Stop
-        if ($response.result) {
+        if ($response.result -and $response.result.chain -eq "regtest") {
             $rpcReady = $true
             break
         }
-    } catch {
-        # Node still starting up
-    }
+    } catch {}
 }
 
 if ($rpcReady) {
-    Write-Host "RPC online! Node active on block height: $($response.result.blocks)" -ForegroundColor Green
-    Write-Host "Launching Rust miner..." -ForegroundColor Cyan
+    Write-Host "RPC online! Chain: $($response.result.chain) | Height: $($response.result.blocks)" -ForegroundColor Green
     cargo run --release
 } else {
-    Write-Host "ERROR: litecoind RPC failed to respond within 15 seconds." -ForegroundColor Red
+    Write-Host "ERROR: litecoind failed to start in regtest mode." -ForegroundColor Red
 }
+'@ | Set-Content -Path "start_silvercoin.ps1" -Encoding UTF8

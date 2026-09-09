@@ -591,6 +591,7 @@ dependencies = [
  "rayon",
  "scrypt",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 
